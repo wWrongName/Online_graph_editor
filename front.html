@@ -1,0 +1,327 @@
+<head>
+    <link href="https://stackpath.bootstrapcdn.com/bootswatch/4.4.1/materia/bootstrap.min.css" rel="stylesheet" integrity="sha384-1tymk6x9Y5K+OF0tlmG2fDRcn67QGzBkiM3IgtJ3VrtGrIi5ryhHjKjeeS60f1FA" crossorigin="anonymous">
+</head>
+<body>
+<br>
+    <h1 style="position: fixed; margin-left: 10px" id="text">Graph editor</h1>
+    <table id="list" style="position: fixed; top: 10%;" class="table table-hover"></table>
+    <button style="margin-left: 15%; width: 10%" type="button" class="btn btn-secondary" id="b1" onclick="let g_name = prompt('Create new name'); if (g_name !== null) create_g(g_name);">Create graph</button>
+    <button style="width: 10%" type="button" class="btn btn-secondary" id="b2" onclick="choose_g();">Choose graph</button>
+    <button style="width: 10%" type="button" class="btn btn-secondary" id="b4" onclick="save_g();">Save graph</button>
+    <canvas id="table" width="0" height="0" style="position: absolute; border:1px solid #858585; left:1px; top: 90px">
+        Graph editor
+    </canvas>
+    <script>
+        let id;
+        let offset = 90;
+        let jsonData;
+        let action = "no";
+        let mousedown = -1;
+        let canvas = document.getElementById("table");
+        const radius = 10;
+        document.oncontextmenu = function () { return false };
+
+        function uuidv4() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        function setCookie(cname, cvalue, exdays) {
+            let d = new Date();
+            d.setTime(d.getTime() + (exdays * 24 * 60 * 60 * 1000));
+            let expires = "expires="+d.toUTCString();
+            document.cookie = cname + "=" + cvalue + ";" + expires + ";path=/";
+        }
+        function getCookie(cname) {
+            let name = cname + "=";
+            let ca = document.cookie.split(';');
+            for(let i = 0; i < ca.length; i++) {
+                let c = ca[i];
+                while (c.charAt(0) == ' ') {
+                    c = c.substring(1);
+                }
+                if (c.indexOf(name) == 0) {
+                    return c.substring(name.length, c.length);
+                }
+            }
+            return "";
+        }
+        function checkCookie() {
+            let user = getCookie("gameToken");
+            if (user != "") {
+                id = user;
+            } else {
+                user = makeId(16);
+                if (user != "" && user != null) {
+                    setCookie("gameToken", user, 365);
+                }
+            }
+        }
+        let makeId = function (length) {
+            let result           = '';
+            let characters       = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            let charactersLength = characters.length;
+            for (let i = 0; i < length; i++) {
+                result += characters.charAt(Math.floor(Math.random() * charactersLength));
+            }
+            return result;
+        };
+
+        let save_g = function () {
+            action = "saveGraph";
+            socket.send(JSON.stringify({
+                command: action,
+                data: jsonData
+            }));
+        };
+        let delete_g = function (graphName) {
+            action = "deleteGraph";
+            socket.send(JSON.stringify({
+                command: action,
+                name: graphName
+            }));
+            choose_g();
+        };
+        let get_g = function (graphName) {
+            action = "getGraph";
+            socket.send(JSON.stringify({
+                command: action,
+                name: graphName
+            }));
+        };
+        let choose_g = function () {
+            action = "getAll";
+            socket.send(JSON.stringify({
+                command: action
+            }));
+        };
+        let create_g = function (graphName) {
+            action = "newGraph";
+            let graph = {
+                name : graphName,
+                nodes : [
+                        {
+                            name : "default",
+                            id : uuidv4(),
+                            x : window.screen.width/2,
+                            y : window.screen.height/2,
+                            neighbours : []
+                        },
+                    ]
+                };
+            socket.send(JSON.stringify({
+                command: action,
+                data: graph
+            }));
+            choose_g();
+        };
+        let create_n = function (coord_x, coord_y, graph) {
+            graph.nodes.push({
+                name : "default",
+                id : uuidv4(),
+                x : coord_x,
+                y : coord_y,
+                neighbours : []
+            });
+            return graph;
+        };
+        let connect_n = function (firstDot, secondDot, graph) {
+            graph.nodes[firstDot].neighbours.push(graph.nodes[secondDot].id);
+            return graph;
+        };
+        let delete_n = function (activeDot, graph) {
+            if (activeDot != -1) {
+                graph.nodes.splice(activeDot, 1);
+            }
+            return graph;
+        };
+        let move_n = function (coord_x, coord_y, dot, graph) {
+            graph.nodes[dot].x = coord_x;
+            graph.nodes[dot].y = coord_y;
+            return graph;
+        };
+        let rename_n = function (dot, graph) {
+            let name = prompt("New name", graph.nodes[dot].name);
+            graph.nodes[dot].name = name;
+            return graph;
+        };
+        let disconnect_n = function (firstDot, secondDot, graph) {
+            console.log("1: " + firstDot + "; 2: " + secondDot);
+            let id1 = graph.nodes[firstDot].id;
+            let id2 = graph.nodes[secondDot].id;
+            for (let i = 0; i < graph.nodes[firstDot].neighbours.length; i++) {
+                if (graph.nodes[firstDot].neighbours[i] === id2)
+                    graph.nodes[firstDot].neighbours.splice(i, 1);
+            }
+            for (let i = 0; i < graph.nodes[secondDot].neighbours.length; i++) {
+                if (graph.nodes[secondDot].neighbours[i] === id1)
+                    graph.nodes[secondDot].neighbours.splice(i, 1);
+            }
+            return graph;
+        };
+
+        let findNodeLocation = function (coord_x, coord_y, graph) {
+             for (let i = 0; i < graph.nodes.length; i++){
+                let cath_a = Math.abs(coord_x - graph.nodes[i].x);
+                let cath_b = Math.abs(coord_y - graph.nodes[i].y);
+                let hypo = Math.sqrt(Math.pow(cath_a, 2) + Math.pow(cath_b, 2));
+                console.log(hypo);
+                if (Math.floor(hypo) <= radius)
+                    return i;
+            }
+             return -1;
+        };
+        let findNodeById = function (id, nodes) {
+            for (let i = 0; i < nodes.length; i++) {
+                if (nodes[i].id === id)
+                    return i;
+            }
+            return -1;
+        };
+
+        checkCookie();
+        console.log(id);
+        let socket = new WebSocket('ws://localhost:1235');
+        socket.onopen = function() {
+            console.log('The connection is established');
+        };
+        socket.onmessage = function(event) {
+            let htmlCode = '';
+            document.getElementById('list').innerHTML = htmlCode;
+            jsonData = JSON.parse(event.data);
+            if (action == "getAll") {
+                canvas.width = 0;
+                canvas.height = 0;
+                console.log(jsonData);
+                jsonData.forEach(function (el) {
+                    htmlCode += `<tr class="table-secondary"><td></td><td></td><td></td><td></td><td></td><td>${el}</td><td><button type="button" class="btn btn-secondary" onclick="get_g('${el}')">open</button><button style="margin-left: 5px" type="button" class="btn btn-secondary" onclick="delete_g('${el}')">delete</button></td></tr>`
+                });
+                document.getElementById("list").innerHTML = htmlCode;
+                console.log("Ok");
+            } else if (action == "getGraph") {
+                if (jsonData == "nothing") {
+                    alert("Graph does not exist");
+                } else {
+                    jsonData.nodes = draw(jsonData.nodes);
+                }
+            } else {
+                alert("Error, wrong event");
+            }
+        };
+        socket.onclose = function(event) {
+            if (event.wasClean) {
+                console.log('The connection is closed clearly');
+            } else {
+                console.log('Lost signal');
+            }
+            console.log('Code: ' + event.code + ' reason: ' + event.reason);
+        };
+
+        let draw = function(nodeList) {
+            console.log(nodeList);
+            let ctx = canvas.getContext("2d");
+            canvas.width = window.screen.width - 3;
+            canvas.height = window.screen.height - 224;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (let i = 0; i < nodeList.length; i++) {
+                for (let j = 0; j < nodeList[i].neighbours.length; j++) {
+                    let loc = findNodeById(nodeList[i].neighbours[j], nodeList);
+                    if (loc != -1) {
+                        ctx.moveTo(nodeList[i].x, nodeList[i].y - offset);
+                        ctx.lineTo(nodeList[loc].x, nodeList[loc].y - offset);
+                        ctx.stroke();
+                    } else {
+                        nodeList[i].neighbours.splice(j, 1);
+                    }
+                }
+                ctx.beginPath();
+                ctx.arc(nodeList[i].x, nodeList[i].y - offset, radius, 0, 2 * Math.PI);
+                ctx.stroke();
+                ctx.fillStyle = "#005fff";
+                ctx.fillText(nodeList[i].name, nodeList[i].x + radius, nodeList[i].y - offset - radius);
+            }
+            return nodeList
+        };
+
+        document.getElementById('table').onclick = event => {
+            console.log(event.clientX);
+            let node;
+            if (event.which == 1) {
+                if (event.ctrlKey) {
+                    action = "connecting";
+                    mousedown = findNodeLocation(event.clientX, event.clientY, jsonData);
+                } else if (action == "connecting" && mousedown != -1) {
+                    console.log("connection");
+                    action = "no";
+                    node = findNodeLocation(event.clientX, event.clientY, jsonData);
+                    jsonData = node != -1 ? connect_n(mousedown, node, jsonData) : jsonData;
+                    mousedown = -1;
+                } else {
+                    node = findNodeLocation(event.clientX, event.clientY, jsonData);
+                    jsonData = node == -1 ? create_n(event.clientX, event.clientY, jsonData) : jsonData;
+                }
+                jsonData.nodes = draw(jsonData.nodes);
+            }
+        };
+        document.getElementById('table').oncontextmenu = event => {
+            if (event.ctrlKey) {
+                action = "destroying";
+                mousedown = findNodeLocation(event.clientX, event.clientY, jsonData);
+            } else if (action == "destroying" && mousedown != -1) {
+                action = "no";
+                console.log(mousedown);
+                node = findNodeLocation(event.clientX, event.clientY, jsonData);
+                jsonData = node != -1 ? disconnect_n(mousedown, node, jsonData) : jsonData;
+                mousedown = -1;
+                draw(jsonData.nodes);
+            } else {
+                console.log("ok");
+                let node = findNodeLocation(event.clientX, event.clientY, jsonData);
+                jsonData = node != -1 ? delete_n(node, jsonData) : jsonData;
+                jsonData.nodes = draw(jsonData.nodes);
+                draw(jsonData.nodes);
+            }
+        };
+        document.getElementById('table').onmousedown = event => {
+            if (event.which == 1 && action != "connecting" && action != "destroying") {
+                mousedown = findNodeLocation(event.clientX, event.clientY, jsonData);
+            }
+        };
+        document.getElementById('table').onmouseup = event => {
+            if (event.which == 1 && action != "connecting" && action != "destroying") {
+                mousedown = -1;
+            }
+        };
+        document.getElementById('table').onmousemove = event => {
+            if (mousedown != -1) {
+                if (action == "connecting") {
+                    jsonData.nodes = draw(jsonData.nodes);
+                    let ctx = canvas.getContext("2d");
+                    ctx.moveTo(jsonData.nodes[mousedown].x, jsonData.nodes[mousedown].y - offset);
+                    ctx.lineTo(event.clientX, event.clientY - offset);
+                    ctx.stroke();
+                } else if (action == "destroying") {
+                    jsonData.nodes = draw(jsonData.nodes);
+                    let ctx = canvas.getContext("2d");
+                    ctx.strokeStyle = "#ff0000";
+                    ctx.moveTo(jsonData.nodes[mousedown].x, jsonData.nodes[mousedown].y - offset);
+                    ctx.lineTo(event.clientX, event.clientY - offset);
+                    ctx.stroke();
+                } else {
+                    jsonData.nodes[mousedown].x = event.clientX;
+                    jsonData.nodes[mousedown].y = event.clientY;
+                    jsonData.nodes = draw(jsonData.nodes);
+                }
+            }
+        };
+        document.getElementById('table').ondblclick = event => {
+            if (event.which == 1) {
+                let node = findNodeLocation(event.clientX, event.clientY, jsonData);
+                jsonData = node != -1 ? rename_n(node, jsonData) : jsonData;
+                jsonData.nodes = draw(jsonData.nodes);
+            }
+        };
+    </script>
+</body>
